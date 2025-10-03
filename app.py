@@ -4,10 +4,9 @@ import pandas as pd
 
 from utils.data_view import show_data_overview
 from utils.correlations import show_correlations
-from utils.wordclouds import show_wordcloud
 from utils.clustering import show_clustering
 from utils.stats_analysis import show_stats
-
+from utils.type_config import show_type_config
 
 st.set_page_config(page_title="Student Survey Analyzer", layout="wide")
 st.title("📊 Student Survey Analyzer")
@@ -26,25 +25,21 @@ if uploaded_file is not None:
         "Что делать?",
         [
             "Базовый просмотр",
+            "Настройка типов данных",
             "Корреляции",
             "Кластеризация",
-            "Облако слов",
             "Статистический анализ"
         ]
     )
 
     if analysis_type == "Базовый просмотр":
         show_data_overview(df)
-
+    elif analysis_type == "Настройка типов данных":
+        show_type_config(df)
     elif analysis_type == "Корреляции":
         show_correlations(df)
-
     elif analysis_type == "Кластеризация":
         show_clustering(df)
-
-    elif analysis_type == "Облако слов":
-        show_wordcloud(df)
-
     elif analysis_type == "Статистический анализ":
         show_stats(df)
 else:
