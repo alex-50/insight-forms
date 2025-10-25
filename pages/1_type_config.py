@@ -1,11 +1,11 @@
 import streamlit as st
 import pandas as pd
 
+st.set_page_config(page_title="Конфигурация типов", layout="wide")
 
 def show_type_config(df):
     st.subheader("⚙️ Настройка типов данных")
 
-    # Инициализация session_state для хранения типов столбцов, если ещё не создано
     if 'column_types' not in st.session_state:
         st.session_state.column_types = {}
         for col in df.columns:
@@ -15,8 +15,6 @@ def show_type_config(df):
                     param_type = "Категориальный"
                 else:
                     param_type = "Количественный"
-            elif pd.api.types.is_datetime64_any_dtype(dtype):
-                param_type = "Временной"
             elif pd.api.types.is_object_dtype(dtype):
                 unique_count = df[col].nunique()
                 avg_length = df[col].dropna().apply(lambda x: len(str(x))).mean()
@@ -31,7 +29,7 @@ def show_type_config(df):
     # Таблица параметров с выбором типов
     st.write("### Выберите типы данных для столбцов")
     st.markdown("Выберите подходящий тип для каждого столбца. Это повлияет на визуализации и анализ.")
-    type_options = ["Количественный", "Категориальный", "Временной", "Текстовый", "Игнорировать"]
+    type_options = ["Количественный", "Категориальный", "Текстовый", "Игнорировать"]
     param_types = []
     for col in df.columns:
         selected_type = st.selectbox(
@@ -48,3 +46,11 @@ def show_type_config(df):
     st.dataframe(pd.DataFrame(param_types))
 
     st.info("Изменённые типы данных будут использованы в визуализациях на странице 'Базовый просмотр'.")
+
+
+# Основная логика страницы
+st.title("Настройка типов")
+if 'df' in st.session_state:
+    show_type_config(st.session_state['df'])
+else:
+    st.info("Загрузите данные на главной странице.")
