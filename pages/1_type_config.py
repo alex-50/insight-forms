@@ -3,9 +3,9 @@ import pandas as pd
 
 st.set_page_config(page_title="Конфигурация типов", layout="wide")
 
-def show_type_config(df):
-    st.subheader("⚙️ Настройка типов данных")
 
+def show_type_config(df):
+    # Инициализация типов, если ещё не заданы
     if 'column_types' not in st.session_state:
         st.session_state.column_types = {}
         for col in df.columns:
@@ -26,30 +26,62 @@ def show_type_config(df):
                 param_type = "Игнорировать"
             st.session_state.column_types[col] = param_type
 
-    # Таблица параметров с выбором типов
-    st.write("### Выберите типы данных для столбцов")
-    st.markdown("Выберите подходящий тип для каждого столбца. Это повлияет на визуализации и анализ.")
+    # Псевдонимы
+    if 'column_aliases' not in st.session_state:
+        st.session_state.column_aliases = {col: col for col in df.columns}
+
+    st.write("### 🏷 Переименование столбцов и выбор типа")
+    st.markdown("Задайте новое имя и тип данных для каждого столбца (в одной строке).")
+
     type_options = ["Количественный", "Категориальный", "Текстовый", "Игнорировать"]
-    param_types = []
+    new_names = {}
+
+    # Выводим горизонтально: псевдоним + тип
     for col in df.columns:
-        selected_type = st.selectbox(
-            f"Тип для {col}",
-            options=type_options,
-            index=type_options.index(st.session_state.column_types[col]),
-            key=f"type_select_{col}"
-        )
+        cols = st.columns([3, 2])  # пропорции: 3 для имени, 2 для типа
+        with cols[0]:
+            alias = st.text_input(
+                f"Новое имя для '{col}'",
+                value=st.session_state.column_aliases.get(col, col),
+                key=f"alias_{col}"
+            )
+        with cols[1]:
+            current_type = st.session_state.column_types.get(col, "Количественный")
+            selected_type = st.selectbox(
+                f"Тип для '{col}'",
+                options=type_options,
+                index=type_options.index(current_type),
+                key=f"type_select_{col}"
+            )
+
+        new_names[col] = alias
         st.session_state.column_types[col] = selected_type
-        param_types.append({
-            'Параметр': col,
-            'Тип': selected_type
-        })
+
+    # Обновляем DataFrame, если имена изменились
+    if any(new_names[col] != col for col in df.columns):
+        df.rename(columns=new_names, inplace=True)
+        st.session_state['df'] = df
+
+        # Обновляем словарь типов под новые имена
+        st.session_state.column_types = {
+            new_names.get(k, k): v for k, v in st.session_state.column_types.items()
+        }
+
+        # Обновляем псевдонимы
+        st.session_state.column_aliases = new_names
+        st.success("✅ Псевдонимы обновлены")
+
+    # Итоговая таблица
+    st.write("### Итоговая конфигурация")
+    param_types = [{'Параметр': col, 'Тип': st.session_state.column_types[col]} for col in df.columns]
     st.dataframe(pd.DataFrame(param_types))
 
-    st.info("Изменённые типы данных будут использованы в визуализациях на странице 'Базовый просмотр'.")
+    st.info("Изменённые типы и названия будут использоваться на странице 'Базовый просмотр'.")
 
 
 # Основная логика страницы
-st.title("Настройка типов")
+st.title("⚙️ Настройка типов данных и псевдонимов")
+
 if 'df' in st.session_state:
     show_type_config(st.session_state['df'])
 else:

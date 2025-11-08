@@ -3,6 +3,8 @@ import plotly.express as px
 import pandas as pd
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
+from plot_styles import apply_plot_style, apply_pie_style
+
 st.set_page_config(page_title="Базовый анализ", layout="wide")
 
 
@@ -10,6 +12,10 @@ st.set_page_config(page_title="Базовый анализ", layout="wide")
 def generate_wordcloud(text):
     return WordCloud(width=1200, height=800, background_color="white").generate(text)
 
+
+# ==========================
+# ОСНОВНАЯ ЛОГИКА
+# ==========================
 
 def show_data_overview(df):
     st.subheader("📋 Базовый просмотр данных")
@@ -81,10 +87,14 @@ def show_data_overview(df):
         "Текстовые для облаков слов:", text_cols, default=[]
     )
 
+    # ==========================
+    # ЧИСЛОВЫЕ — ГИСТОГРАММА
+    # ==========================
     if selected_numeric:
         st.markdown("#### Количественные данные")
         for col in selected_numeric:
             st.markdown(f"**Гистограмма: {col}**")
+
             group_col = st.selectbox(
                 "Группировать по категориальному столбцу:",
                 ["Без группировки"] + categorical_cols,
@@ -92,17 +102,26 @@ def show_data_overview(df):
                 key=f"group_col_numeric_{col}"
             )
             group_col = None if group_col == "Без группировки" else group_col
+
             fig = px.histogram(
                 df, x=col, color=group_col, nbins=20,
-                title=f"Распределение {col} {f'по {group_col}' if group_col else ''}", template="plotly_white"
+                title=f"Распределение {col} {f'по {group_col}' if group_col else ''}",
+                template="plotly_white",
+                text_auto=True
             )
+            fig = apply_plot_style(fig)
+
             st.plotly_chart(fig, use_container_width=True)
 
+    # ==========================
+    # КАТЕГОРИАЛЬНЫЕ — BAR / PIE
+    # ==========================
     if selected_categorical:
         st.markdown("#### Категориальные данные")
-        cat_chart_types = {}
+
         for col in selected_categorical:
             st.markdown(f"**{col}**")
+
             group_col = st.selectbox(
                 "Группировать по категориальному столбцу:",
                 ["Без группировки"] + [c for c in categorical_cols if c != col],
@@ -110,51 +129,72 @@ def show_data_overview(df):
                 key=f"group_col_categorical_{col}"
             )
             group_col = None if group_col == "Без группировки" else group_col
+
             chart_type = st.sidebar.radio(
                 f"Тип графика для {col}",
                 options=["bar", "pie"],
                 index=0,
                 key=f"chart_type_{col}"
             )
-            cat_chart_types[col] = chart_type
+
+            # ===== BAR =====
             if chart_type == "bar":
                 if group_col:
                     value_counts = df.groupby([group_col, col]).size().reset_index(name="count")
                     fig = px.bar(
                         value_counts, x=col, y="count", color=group_col,
-                        title=f"Распределение {col} по {group_col}", template="plotly_white"
+                        title=f"Распределение {col} по {group_col}",
+                        template="plotly_white",
+                        text_auto=True
                     )
-                    st.plotly_chart(fig, use_container_width=True)
                 else:
                     value_counts = df[col].value_counts().reset_index()
                     value_counts.columns = [col, "count"]
                     fig = px.bar(
-                        value_counts, y=col, x="count", title=f"Распределение {col}", template="plotly_white"
+                        value_counts, y=col, x="count",
+                        title=f"Распределение {col}",
+                        template="plotly_white",
+                        text_auto=True
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+
+                fig = apply_plot_style(fig)
+                st.plotly_chart(fig, use_container_width=True)
+
+            # ===== PIE =====
             else:
                 if group_col:
                     for group in df[group_col].dropna().unique():
-                        group_df = df[df[group_col] == group]
-                        value_counts = group_df[col].value_counts().reset_index()
+                        st.markdown(f"**{col} для {group_col} = {group}**")
+                        grp = df[df[group_col] == group]
+                        value_counts = grp[col].value_counts().reset_index()
                         value_counts.columns = [col, "count"]
                         fig = px.pie(
                             value_counts, names=col, values="count",
-                            title=f"Распределение {col} для {group_col}={group}", template="plotly_white"
+                            title=f"Распределение {col} ({group})",
+                            template="plotly_white"
                         )
+                        fig = apply_pie_style(fig)
                         st.plotly_chart(fig, use_container_width=True)
                 else:
                     value_counts = df[col].value_counts().reset_index()
                     value_counts.columns = [col, "count"]
                     fig = px.pie(
-                        value_counts, names=col, values="count", title=f"Распределение {col}", template="plotly_white"
+                        value_counts, names=col, values="count",
+                        title=f"Распределение {col}",
+                        template="plotly_white"
                     )
+                    fig = apply_pie_style(fig)
                     st.plotly_chart(fig, use_container_width=True)
 
+    # ==========================
+    # ТЕКСТ — ОБЛАКО СЛОВ
+    # ==========================
     if selected_text:
         st.markdown("#### Текстовые данные")
+
         for col in selected_text:
             st.markdown(f"**Облако слов: {col}**")
+
             group_col = st.selectbox(
                 "Группировать по категориальному столбцу:",
                 ["Без группировки"] + categorical_cols,
@@ -162,9 +202,10 @@ def show_data_overview(df):
                 key=f"group_col_text_{col}"
             )
             group_col = None if group_col == "Без группировки" else group_col
+
             if group_col:
                 for group in df[group_col].dropna().unique():
-                    st.markdown(f"**Облако слов: {col} для {group_col}={group}**")
+                    st.markdown(f"**{col}, {group_col}={group}**")
                     group_text = " ".join(str(val) for val in df[df[group_col] == group][col].dropna())
                     if not group_text.strip():
                         st.warning(f"Нет текста для {col} в группе {group}.")
@@ -173,7 +214,7 @@ def show_data_overview(df):
                     fig, ax = plt.subplots(figsize=(10, 6))
                     ax.imshow(wordcloud, interpolation="bilinear")
                     ax.axis("off")
-                    st.pyplot(fig, use_container_width=False)
+                    st.pyplot(fig)
             else:
                 text = " ".join(str(val) for val in df[col].dropna())
                 if not text.strip():
@@ -183,7 +224,7 @@ def show_data_overview(df):
                 fig, ax = plt.subplots(figsize=(10, 6))
                 ax.imshow(wordcloud, interpolation="bilinear")
                 ax.axis("off")
-                st.pyplot(fig, use_container_width=False)
+                st.pyplot(fig)
 
 
 st.title("🤓 Базовый анализ")
