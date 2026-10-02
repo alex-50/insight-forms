@@ -1,3 +1,15 @@
+"""
+Страница «Продвинутый анализ».
+
+Содержит четыре раздела:
+- Корреляции: heatmap + scatter с OLS-трендом для сильных связей.
+- Кластеризация: KMeans + автоподбор k через silhouette.
+- Статистика: t-test, χ², ANOVA.
+- SQL: запросы к загруженному df через SQLite in-memory.
+
+Все разделы уважают типы из st.session_state.column_types:
+столбцы с типом «Игнорировать» не попадают в анализ.
+"""
 import streamlit as st
 import plotly.express as px
 from sklearn.cluster import KMeans
@@ -9,34 +21,46 @@ import scipy.stats as stats
 from streamlit_ace import st_ace
 import sqlite3
 
-st.set_page_config(page_title="Продвинутый анализ 🔬", layout="wide")
+from plot_styles import apply_plot_style
 
 
-# ==================== Стили графиков ====================
-def apply_plot_style(fig):
-    fig.update_layout(
-        font=dict(size=16, family="Consolas", color="#404040"),
-        title_font=dict(size=22, family="Consolas", color="#404040"),
-        legend=dict(font=dict(size=14, family="Consolas", color="#404040")),
-        xaxis=dict(title_font=dict(size=18, family="Consolas", color="#404040"),
-                   tickfont=dict(size=14, family="Consolas", color="#404040")),
-        yaxis=dict(title_font=dict(size=18, family="Consolas", color="#404040"),
-                   tickfont=dict(size=14, family="Consolas", color="#404040")),
-        plot_bgcolor="rgba(255,255,255,1)",
-        paper_bgcolor="rgba(255,255,255,0)"
-    )
-    return fig
+# ==================== Хелперы ====================
+
+def _get_numeric_cols(df: pd.DataFrame) -> list[str]:
+    """Возвращает список столбцов с типом «Количественный»."""
+    return [
+        c for c, t in st.session_state.column_types.items()
+        if t == "Количественный" and c in df.columns
+    ]
+
+
+def _get_categorical_cols(df: pd.DataFrame) -> list[str]:
+    """Возвращает список столбцов с типом «Категориальный» и <=10 уникальных значений."""
+    return [
+        c for c, t in st.session_state.column_types.items()
+        if t == "Категориальный" and c in df.columns and df[c].nunique() <= 10
+    ]
 
 
 # ==================== Корреляции ====================
-def show_correlations(df):
+
+def show_correlations(df: pd.DataFrame) -> None:
+    """
+    Корреляционный анализ: heatmap + scatter-графики для сильных связей.
+
+    Пользователь выбирает столбцы, пороги положительной/отрицательной связи.
+    Для каждой пары, превысившей порог, строится scatter с OLS-трендом.
+
+    Args:
+        df: DataFrame из st.session_state['df'].
+    """
     st.subheader("🔗 Корреляционный анализ")
     if df.empty:
         st.error("DataFrame пустой!")
         return
-    numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns.tolist()
+    numeric_cols = _get_numeric_cols(df)
     if len(numeric_cols) < 2:
-        st.warning("Нужно хотя бы 2 числовых столбца")
+        st.warning("Нужно хотя бы 2 числовых столбца (с типом «Количественный»)")
         return
     selected_cols = st.sidebar.multiselect(
         "Выберите столбцы для анализа корреляций:",
@@ -67,6 +91,7 @@ def show_correlations(df):
                 strong_neg.append((corr_matrix.columns[i], corr_matrix.columns[j], val))
 
     def create_scatter_plot(x_col, y_col, corr_val, correlation_type):
+        """Строит scatter с OLS-трендом для пары столбцов."""
         plot_data = analysis_df[[x_col, y_col]].dropna()
         if len(plot_data) < 2:
             st.warning(f"Недостаточно данных для {x_col} vs {y_col}")
@@ -81,7 +106,8 @@ def show_correlations(df):
         for x_col, y_col, corr_val in strong_pos:
             st.write(f"**{x_col}** ↔ **{y_col}** (r = {corr_val:.3f})")
             fig = create_scatter_plot(x_col, y_col, corr_val, "Положительная связь")
-            if fig: st.plotly_chart(fig, use_container_width=True)
+            if fig:
+                st.plotly_chart(fig, use_container_width=True)
             st.markdown("---")
     else:
         st.info(f"Нет сильных положительных связей (r ≥ {pos_threshold})")
@@ -91,31 +117,53 @@ def show_correlations(df):
         for x_col, y_col, corr_val in strong_neg:
             st.write(f"**{x_col}** ↔ **{y_col}** (r = {corr_val:.3f})")
             fig = create_scatter_plot(x_col, y_col, corr_val, "Отрицательная связь")
-            if fig: st.plotly_chart(fig, use_container_width=True)
+            if fig:
+                st.plotly_chart(fig, use_container_width=True)
             st.markdown("---")
     else:
         st.info(f"Нет сильных отрицательных связей (r ≤ {neg_threshold})")
 
 
 # ==================== Кластеризация ====================
-def show_clustering(df):
+
+def show_clustering(df: pd.DataFrame) -> None:
+    """
+    Кластеризация KMeans с опциональным автоподбором k.
+
+    Пользователь выбирает числовые столбцы. При нажатии на кнопку
+    «Определить оптимальное количество кластеров» перебираются k=2..10
+    и выбирается с максимальным silhouette score.
+
+    Args:
+        df: DataFrame из st.session_state['df'].
+    """
     st.subheader("🌀 Кластеризация (KMeans)")
-    numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns.tolist()
-    if len(numeric_cols) < 2: st.warning("Нужно минимум 2 числовых столбца"); return
+    numeric_cols = _get_numeric_cols(df)
+    if len(numeric_cols) < 2:
+        st.warning("Нужно минимум 2 числовых столбца (с типом «Количественный»)")
+        return
     selected_cols = st.multiselect("Выберите параметры для кластеризации:", numeric_cols, default=numeric_cols[:2])
-    if len(selected_cols) < 2: st.warning("Выберите хотя бы 2 столбца"); return
+    if len(selected_cols) < 2:
+        st.warning("Выберите хотя бы 2 столбца")
+        return
     X = df[selected_cols].dropna()
-    if len(X) < 2: st.warning("Недостаточно данных"); return
+    if len(X) < 2:
+        st.warning("Недостаточно данных")
+        return
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    if 'n_clusters' not in st.session_state: st.session_state['n_clusters'] = 3
+    if 'n_clusters' not in st.session_state:
+        st.session_state['n_clusters'] = 3
     if st.button("Определить оптимальное количество кластеров"):
         max_k = min(10, len(X) - 1)
-        if max_k < 2: st.warning("Недостаточно данных для определения k"); return
+        if max_k < 2:
+            st.warning("Недостаточно данных для определения k")
+            return
         silhouette_scores = [
-            silhouette_score(X_scaled, KMeans(n_clusters=k, random_state=42, n_init=10).fit_predict(X_scaled)) for k in
-            range(2, max_k + 1)]
+            silhouette_score(X_scaled, KMeans(n_clusters=k, random_state=42, n_init=10).fit_predict(X_scaled))
+            for k in range(2, max_k + 1)
+        ]
         optimal_k = range(2, max_k + 1)[np.argmax(silhouette_scores)]
         st.session_state['n_clusters'] = optimal_k
         st.success(f"Оптимальное k: {optimal_k}")
@@ -142,37 +190,63 @@ def show_clustering(df):
 
 
 # ==================== Статистический анализ ====================
-def _t_test(df, col_group, col_value):
+
+def _t_test(df: pd.DataFrame, col_group: str, col_value: str) -> dict:
+    """t-тест Уэлча для двух групп."""
     g1, g2 = df[col_group].dropna().unique()
-    s1, s2 = df[df[col_group] == g1][col_value].dropna(), df[df[col_group] == g2][col_value].dropna()
+    s1 = df[df[col_group] == g1][col_value].dropna()
+    s2 = df[df[col_group] == g2][col_value].dropna()
     stat, pval = stats.ttest_ind(s1, s2, equal_var=False)
     return {"statistic": stat, "pvalue": pval, "group_names": (g1, g2), "n1": len(s1), "n2": len(s2)}
 
 
-def _chi2(df, col1, col2):
+def _chi2(df: pd.DataFrame, col1: str, col2: str) -> dict:
+    """χ²-тест независимости для двух категориальных столбцов."""
     contingency = pd.crosstab(df[col1], df[col2])
     chi2, pval, dof, expected = stats.chi2_contingency(contingency)
     return {"chi2": chi2, "pvalue": pval, "dof": dof, "expected": expected, "contingency": contingency}
 
 
-def _anova(df, col_group, col_value):
-    groups = [df[df[col_group] == g][col_value].dropna() for g in df[col_group].dropna().unique()]
+def _anova(df: pd.DataFrame, col_group: str, col_value: str) -> dict:
+    """Однофакторный ANOVA для нескольких групп."""
+    groups = [df[df[col_group] == g][col_value].dropna() for g in df[df[col_group].notna()][col_group].unique()]
     stat, pval = stats.f_oneway(*groups)
     return {"F": stat, "pvalue": pval}
 
 
-def show_stats(df):
+def show_stats(df: pd.DataFrame) -> None:
+    """
+    Статистический анализ: t-test, χ², ANOVA.
+
+    Пользователь выбирает тест и столбцы. Для t-test и ANOVA
+    дополнительно строится box-plot.
+
+    Args:
+        df: DataFrame из st.session_state['df'].
+    """
     st.subheader("📊 Статистический анализ (t-test, χ², ANOVA)")
-    num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    cat_cols = df.select_dtypes(exclude=[np.number]).columns.tolist()
-    int_like = [c for c in df.columns if pd.api.types.is_integer_dtype(df[c]) and df[c].nunique() <= 10]
+    num_cols = _get_numeric_cols(df)
+    cat_cols = _get_categorical_cols(df)
+    int_like = [
+        c for c in df.columns
+        if pd.api.types.is_integer_dtype(df[c])
+           and df[c].nunique() <= 10
+           and st.session_state.column_types.get(c) != "Игнорировать"
+    ]
     for c in int_like:
-        if c not in cat_cols: cat_cols.append(c)
+        if c not in cat_cols:
+            cat_cols.append(c)
 
     test = st.selectbox("Выберите тест:", ["t-test", "χ² (хи-квадрат)", "ANOVA"])
     if test == "t-test":
-        group_candidates = [c for c in df.columns if df[c].nunique() == 2]
-        if not group_candidates or not num_cols: st.warning("Недостаточно данных для t-test"); return
+        group_candidates = [
+            c for c in df.columns
+            if df[c].nunique() == 2
+               and st.session_state.column_types.get(c) != "Игнорировать"
+        ]
+        if not group_candidates or not num_cols:
+            st.warning("Недостаточно данных для t-test")
+            return
         col_group = st.selectbox("Колонка с группами:", group_candidates)
         col_value = st.selectbox("Числовая колонка:", num_cols)
         if st.button("Выполнить t-test"):
@@ -182,7 +256,9 @@ def show_stats(df):
             fig = apply_plot_style(fig)
             st.plotly_chart(fig, use_container_width=True)
     elif test == "χ² (хи-квадрат)":
-        if len(cat_cols) < 2: st.warning("Недостаточно категориальных колонок"); return
+        if len(cat_cols) < 2:
+            st.warning("Недостаточно категориальных колонок")
+            return
         col1 = st.selectbox("Категориальная колонка 1:", cat_cols)
         col2 = st.selectbox("Категориальная колонка 2:", [c for c in cat_cols if c != col1])
         if st.button("Выполнить χ²"):
@@ -190,8 +266,14 @@ def show_stats(df):
             st.write(f"χ²={res['chi2']:.4f}, p={res['pvalue']:.4f}, dof={res['dof']}")
             st.dataframe(res["contingency"])
     elif test == "ANOVA":
-        group_candidates = [c for c in df.columns if df[c].nunique() >= 2]
-        if not group_candidates or not num_cols: st.warning("Недостаточно данных для ANOVA"); return
+        group_candidates = [
+            c for c in df.columns
+            if df[c].nunique() >= 2
+               and st.session_state.column_types.get(c) != "Игнорировать"
+        ]
+        if not group_candidates or not num_cols:
+            st.warning("Недостаточно данных для ANOVA")
+            return
         col_group = st.selectbox("Группирующая колонка:", group_candidates)
         col_value = st.selectbox("Числовая колонка:", num_cols)
         if st.button("Выполнить ANOVA"):
@@ -203,7 +285,18 @@ def show_stats(df):
 
 
 # ==================== SQL ====================
-def show_sql(df):
+
+def show_sql(df: pd.DataFrame) -> None:
+    """
+    SQL-запросы к загруженному DataFrame через SQLite in-memory.
+
+    Таблица называется `data`. Запросы выполняются через
+    streamlit-ace (подсветка синтаксиса SQL). Игнорируемые столбцы
+    НЕ фильтруются — доступны для запросов.
+
+    Args:
+        df: DataFrame из st.session_state['df'].
+    """
     st.subheader("💻 SQL-запросы к данным")
     st.markdown("""
         Здесь вы можете выполнять SQL-запросы к загруженной таблице.
@@ -223,6 +316,7 @@ def show_sql(df):
 
 
 # ==================== Основная логика ====================
+
 st.title("🔬 Продвинутый анализ")
 if 'df' in st.session_state:
     df = st.session_state['df']

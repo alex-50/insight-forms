@@ -1,23 +1,44 @@
+"""
+Страница «Базовый анализ».
+
+Отображает:
+- размер, первые строки, описательную статистику (без игнорируемых столбцов);
+- таблицу типов параметров;
+- визуализации: гистограммы, bar/pie, wordcloud — по выбору пользователя в сайдбаре.
+
+Все списки столбцов строятся из st.session_state.column_types, поэтому
+столбцы с типом «Игнорировать» нигде не участвуют.
+"""
 import streamlit as st
 import plotly.express as px
 import pandas as pd
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
-from plot_styles import apply_plot_style, apply_pie_style
-
-st.set_page_config(page_title="Базовый анализ", layout="wide")
+from plot_styles import apply_bar_style, apply_pie_style
+from type_config import init_column_types
 
 
 @st.cache_data
-def generate_wordcloud(text):
+def generate_wordcloud(text: str) -> WordCloud:
+    """
+    Кэшированная генерация облака слов.
+
+    Args:
+        text: объединённый текст для облака.
+
+    Returns:
+        Объект WordCloud с построенной картой слов.
+    """
     return WordCloud(width=1200, height=800, background_color="white").generate(text)
 
 
-# ==========================
-# ОСНОВНАЯ ЛОГИКА
-# ==========================
+def show_data_overview(df: pd.DataFrame) -> None:
+    """
+    Отображает страницу базового анализа и визуализации.
 
-def show_data_overview(df):
+    Args:
+        df: DataFrame из st.session_state['df'].
+    """
     st.subheader("📋 Базовый просмотр данных")
 
     st.write("### Размер DataFrame:", df.shape)
@@ -25,12 +46,22 @@ def show_data_overview(df):
     st.write("### Первые строки таблицы")
     st.dataframe(df.head())
 
+    init_column_types(df)
+
+    active_cols = [
+        c for c in df.columns
+        if st.session_state.column_types.get(c) != "Игнорировать"
+    ]
+
     st.write("### Общая информация")
-    st.write(df.describe(include="all"))
+    if active_cols:
+        st.write(df[active_cols].describe(include="all"))
+    else:
+        st.info("Все столбцы помечены как «Игнорировать».")
 
     st.write("### Информация о типах данных:")
     info_data = []
-    for col in df.columns:
+    for col in active_cols:
         info_data.append({
             'Столбец': col,
             'Тип': str(df[col].dtype),
@@ -40,39 +71,25 @@ def show_data_overview(df):
         })
     st.dataframe(pd.DataFrame(info_data))
 
-    if 'column_types' not in st.session_state:
-        st.session_state.column_types = {}
-        for col in df.columns:
-            dtype = df[col].dtype
-            if pd.api.types.is_numeric_dtype(dtype):
-                if pd.api.types.is_integer_dtype(dtype) and df[col].nunique() <= 10:
-                    param_type = "Категориальный"
-                else:
-                    param_type = "Количественный"
-            elif pd.api.types.is_object_dtype(dtype):
-                unique_count = df[col].nunique()
-                avg_length = df[col].dropna().apply(lambda x: len(str(x))).mean()
-                if unique_count <= 10 or avg_length < 20:
-                    param_type = "Категориальный"
-                else:
-                    param_type = "Текстовый"
-            else:
-                param_type = "Игнорировать"
-            st.session_state.column_types[col] = param_type
-
     st.write("### Типы параметров")
-    param_types = []
-    for col in df.columns:
-        param_types.append({
-            'Параметр': col,
-            'Тип': st.session_state.column_types[col]
-        })
+    param_types = [
+        {'Параметр': col, 'Тип': st.session_state.column_types.get(col, "—")}
+        for col in df.columns
+    ]
     st.dataframe(pd.DataFrame(param_types))
 
-    numeric_cols = [col for col, col_type in st.session_state.column_types.items() if col_type == "Количественный"]
-    categorical_cols = [col for col, col_type in st.session_state.column_types.items() if
-                        col_type == "Категориальный" and df[col].nunique() <= 10]
-    text_cols = [col for col, col_type in st.session_state.column_types.items() if col_type == "Текстовый"]
+    numeric_cols = [
+        c for c, t in st.session_state.column_types.items()
+        if t == "Количественный" and c in df.columns
+    ]
+    categorical_cols = [
+        c for c, t in st.session_state.column_types.items()
+        if t == "Категориальный" and c in df.columns and df[c].nunique() <= 10
+    ]
+    text_cols = [
+        c for c, t in st.session_state.column_types.items()
+        if t == "Текстовый" and c in df.columns
+    ]
 
     st.write("### Визуализация признаков")
 
@@ -87,12 +104,12 @@ def show_data_overview(df):
         "Текстовые для облаков слов:", text_cols, default=[]
     )
 
-    # ==========================
-    # ЧИСЛОВЫЕ — ГИСТОГРАММА
-    # ==========================
+    # --- Числовые ---
     if selected_numeric:
         st.markdown("#### Количественные данные")
         for col in selected_numeric:
+            if col not in df.columns:
+                continue
             st.markdown(f"**Гистограмма: {col}**")
 
             group_col = st.selectbox(
@@ -109,17 +126,16 @@ def show_data_overview(df):
                 template="plotly_white",
                 text_auto=True
             )
-            fig = apply_plot_style(fig)
-
+            fig = apply_bar_style(fig)
             st.plotly_chart(fig, use_container_width=True)
 
-    # ==========================
-    # КАТЕГОРИАЛЬНЫЕ — BAR / PIE
-    # ==========================
+    # --- Категориальные ---
     if selected_categorical:
         st.markdown("#### Категориальные данные")
 
         for col in selected_categorical:
+            if col not in df.columns:
+                continue
             st.markdown(f"**{col}**")
 
             group_col = st.selectbox(
@@ -137,7 +153,6 @@ def show_data_overview(df):
                 key=f"chart_type_{col}"
             )
 
-            # ===== BAR =====
             if chart_type == "bar":
                 if group_col:
                     value_counts = df.groupby([group_col, col]).size().reset_index(name="count")
@@ -156,12 +171,10 @@ def show_data_overview(df):
                         template="plotly_white",
                         text_auto=True
                     )
-
-                fig = apply_plot_style(fig)
+                fig = apply_bar_style(fig)
                 st.plotly_chart(fig, use_container_width=True)
 
-            # ===== PIE =====
-            else:
+            else:  # pie
                 if group_col:
                     for group in df[group_col].dropna().unique():
                         st.markdown(f"**{col} для {group_col} = {group}**")
@@ -186,13 +199,13 @@ def show_data_overview(df):
                     fig = apply_pie_style(fig)
                     st.plotly_chart(fig, use_container_width=True)
 
-    # ==========================
-    # ТЕКСТ — ОБЛАКО СЛОВ
-    # ==========================
+    # --- Текстовые ---
     if selected_text:
         st.markdown("#### Текстовые данные")
 
         for col in selected_text:
+            if col not in df.columns:
+                continue
             st.markdown(f"**Облако слов: {col}**")
 
             group_col = st.selectbox(
@@ -206,28 +219,29 @@ def show_data_overview(df):
             if group_col:
                 for group in df[group_col].dropna().unique():
                     st.markdown(f"**{col}, {group_col}={group}**")
-                    group_text = " ".join(str(val) for val in df[df[group_col] == group][col].dropna())
+                    group_text = " ".join(str(v) for v in df[df[group_col] == group][col].dropna())
                     if not group_text.strip():
                         st.warning(f"Нет текста для {col} в группе {group}.")
                         continue
-                    wordcloud = generate_wordcloud(group_text)
+                    wc = generate_wordcloud(group_text)
                     fig, ax = plt.subplots(figsize=(10, 6))
-                    ax.imshow(wordcloud, interpolation="bilinear")
+                    ax.imshow(wc, interpolation="bilinear")
                     ax.axis("off")
                     st.pyplot(fig)
             else:
-                text = " ".join(str(val) for val in df[col].dropna())
+                text = " ".join(str(v) for v in df[col].dropna())
                 if not text.strip():
                     st.warning(f"Нет текста для отображения в столбце {col}.")
                     continue
-                wordcloud = generate_wordcloud(text)
+                wc = generate_wordcloud(text)
                 fig, ax = plt.subplots(figsize=(10, 6))
-                ax.imshow(wordcloud, interpolation="bilinear")
+                ax.imshow(wc, interpolation="bilinear")
                 ax.axis("off")
                 st.pyplot(fig)
 
 
 st.title("🤓 Базовый анализ")
+
 if 'df' in st.session_state:
     show_data_overview(st.session_state['df'])
 else:
