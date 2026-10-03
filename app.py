@@ -9,7 +9,7 @@
 import streamlit as st
 import pandas as pd
 
-st.set_page_config(page_title="Survey Analyzer 📊", layout="wide")
+st.set_page_config(page_title="Insight Forms 📊", layout="wide")
 
 st.markdown("""
     <style>
